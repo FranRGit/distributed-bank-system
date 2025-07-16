@@ -1,0 +1,6 @@
+{
+    "heartbeat_interval": 1,
+    "election_timeout_min": 5.0,
+    "election_timeout_max": 6.5,
+    "request_timeout": 1.5
+}
