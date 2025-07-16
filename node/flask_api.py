@@ -1,12 +1,11 @@
 # node/api.py
 from flask import Flask, request, jsonify
-from .raft_node import RaftNode
+from .raft_node import RaftNode, load_config 
 from .bank_node import BankNode
-from .storage import save_state, load_state
 
 app = Flask(__name__)
-raft = RaftNode(None, [])
-bank = BankNode()
+bank = None
+raft = None
 
 @app.route("/status", methods=["GET"])
 def status():
@@ -19,18 +18,36 @@ def balance():
 @app.route("/deposit", methods=["POST"])
 def deposit():
     data = request.get_json()
-    account = data.get("account")
-    amount = data.get("amount")
-    new_balance = bank.deposit(account, amount)
-    save_state("state.json", bank.get_balances())
-    return jsonify({account: new_balance})
+    op = {"type": "deposit", "account": data["account"], "amount": data["amount"]}
+
+    if raft.role != "leader":
+        return jsonify({"error": "not_leader", "leader": raft.leader_id}), 403
+
+    if raft.replicate_operation(op):
+        return jsonify({"status": "ok"})
+    else:
+        return jsonify({"status": "replication_failed"}), 500
 
 @app.route("/transfer", methods=["POST"])
 def transfer():
     data = request.get_json()
-    success = bank.transfer(data["from"], data["to"], data["amount"])
-    save_state("state.json", bank.get_balances())
-    return jsonify({"success": success, "balances": bank.get_balances()})
+    op = {"type": "transfer", "from": data["from"], "to": data["to"], "amount": data["amount"]}
+
+    if raft.role != "leader":
+        return jsonify({"error": "not_leader", "leader": raft.leader_id}), 403
+
+    if raft.replicate_operation(op):
+        return jsonify({"status": "ok"})
+    else:
+        return jsonify({"status": "replication_failed"}), 500
+
+@app.route("/replicate", methods=["POST"])
+def replicate():
+    data = request.get_json()
+    op = data["op"]
+    term = data["term"]
+
+    return jsonify(raft.append_entry(op, term))
 
 @app.route("/heartbeat", methods=["POST"])
 def heartbeat():

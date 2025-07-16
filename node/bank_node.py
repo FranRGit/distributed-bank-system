@@ -1,6 +1,6 @@
 class BankNode:
     def __init__(self):
-        self.accounts = {"A": 1000, "B": 1000}
+        self.accounts = {}  
 
     def deposit(self, account, amount):
         if account not in self.accounts:

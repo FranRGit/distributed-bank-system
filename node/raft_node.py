@@ -6,15 +6,17 @@ import requests
 import json
 import os
 
+from .storage import save_log, load_log, save_state
+
 def load_config():
     with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
         return json.load(f)
 
 
 class RaftNode:
-    def __init__(self, node_id, peers):
+    def __init__(self, node_id, peers, bank):
         self.node_id = node_id
-        self.peers = peers  # Lista de URLs de los otros nodos
+        self.peers = peers  
         self.role = "follower"
         self.current_term = 1
         self.voted_for = None
@@ -22,8 +24,15 @@ class RaftNode:
         self.last_heartbeat = time.time()
         self.election_in_progress = False
         self.lock = threading.Lock()
+        self.commit_index = -1
+        self.bank = bank 
+        self.log = load_log(f"log_{self.node_id}.json")  
+        self.commit_index = -1
 
-        # Cargar configuración desde JSON
+        for op in self.log:
+            self.apply_operation(op)
+            self.commit_index += 1
+
         config = load_config()
         self.heartbeat_interval = config["heartbeat_interval"]
         self.election_timeout_min = config["election_timeout_min"]
@@ -139,3 +148,45 @@ class RaftNode:
             "term": self.current_term,
             "leader_id": self.leader_id
         }
+
+    def replicate_operation(self, op):
+        self.log.append(op)
+        save_log(f"log_{self.node_id}.json", self.log)
+
+        success_count = 1 
+        for peer in self.peers:
+            try:
+                r = requests.post(f"{peer}/replicate", json={"op": op, "term": self.current_term})
+                if r.status_code == 200:
+                    success_count += 1
+                else:
+                    print(f"[{self.node_id}] Falló replicación en {peer}: {r.status_code}")
+            except Exception as e:
+                print(f"[{self.node_id}] Error replicando en {peer}: {e}")
+
+        if success_count >= ((len(self.peers) + 1) // 2) + 1:
+            self.apply_operation(op)
+            self.commit_index += 1
+            return True
+        return False
+    
+    def apply_operation(self, op):
+        if op["type"] == "deposit":
+            self.bank.deposit(op["account"], op["amount"])
+        elif op["type"] == "transfer":
+            self.bank.transfer(op["from"], op["to"], op["amount"])
+        save_state("state.json", self.bank.get_balances())
+
+    def append_entry(self, op, term):
+        with self.lock:
+            if term < self.current_term:
+                return {"status": "rejected"}
+
+            self.current_term = term
+            self.log.append(op)
+            save_log(f"log_{self.node_id}.json", self.log)  # ← ESTA LÍNEA FALTABA
+            self.apply_operation(op)
+            self.commit_index += 1
+            print(f"[{self.node_id}] Operación replicada y aplicada: {op}")
+            return {"status": "ok"}
+
